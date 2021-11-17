@@ -1,0 +1,519 @@
+---
+title: "Hateful Memes Hosted By Facebook"
+author: "Mohammad Sahadat Hossain"
+date: "8/3/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+```{r}
+library(jsonlite)
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(quanteda)
+library(tidytext)
+library(tm)
+```
+
+
+
+```{r}
+train_df<- readLines("train.jsonl") %>% 
+  lapply(fromJSON) %>% 
+  lapply(unlist) %>% 
+  bind_rows()
+
+train_df$id<- as.numeric(train_df$id)
+
+library(lfactors)
+train_df$label_name<- lfactor(train_df$label, levels = 0:1, 
+                         labels =  c("non-hateful", "hateful"))
+
+```
+
+
+```{r}
+dev_df<- readLines("dev.jsonl") %>% 
+  lapply(fromJSON) %>% 
+  lapply(unlist) %>% 
+  bind_rows() %>% 
+  select(- img)
+
+dev_df$id<- as.numeric(dev_df$id)
+
+
+dev_df$label_name<- lfactor(dev_df$label, levels = 0:1, 
+                         labels =  c("non-hateful", "hateful"))
+```
+
+
+```{r}
+train_df %>%
+  ggplot(aes(label_name))+
+  geom_bar()
+
+```
+
+
+```{r}
+train_df %>%
+   mutate(text = removeWords(text, stopwords("english")),
+          text = removeNumbers(text)) %>% 
+   unnest_ngrams(bigram, text, n=3) %>%
+   filter(!str_detect(bigram, "^[0-9]*$")) %>%
+#   anti_join(stop_words) %>%
+ #  mutate(word = SnowballC::wordStem(word)) %>% 
+   group_by(label) %>% 
+   count(bigram, sort = T) %>%
+   top_n(15, wt = n) %>% 
+   ungroup() %>% 
+   mutate(bigram = reorder_within(bigram, n, label)) %>% 
+   ggplot(aes(bigram, n))+
+   geom_col()+
+   scale_x_reordered()+
+   xlab(NULL)+
+   facet_wrap(~label, scales = "free")+
+   coord_flip()
+
+train_df %>%
+   select(-img) %>%
+   unnest_tokens(word, text) %>%
+   mutate(word = SnowballC::wordStem(word),
+          word = ifelse(grepl("ω", word), "omega", word),
+          word = ifelse(grepl("america", word), "america", word),
+          word = ifelse(grepl("allah", word), "allah", word),
+          word = removeNumbers(word),
+          word = removeWords(word, stopwords("english")),
+          word = gsub("[[:punct:]]", " ", word)) %>% 
+  count(label, word) %>% 
+  bind_tf_idf(word,label, n) %>% 
+  group_by(label) %>%
+  top_n(10) %>%
+  ungroup() %>%
+  mutate(word = reorder_within(word, tf_idf, label)) %>%
+  ggplot(aes(word, tf_idf)) +
+  geom_col() +
+  scale_x_reordered() +
+  labs(x = NULL, y = "tf-idf") +
+  facet_wrap(~ label, scales = "free") +
+  coord_flip()
+```
+
+
+
+```{r}
+train_token<- train_df %>%
+   select(-img) %>%
+   mutate(text = removeWords(text, stopwords("english"))) %>%   
+   unnest_tokens(word, text) %>%
+   mutate(word = SnowballC::wordStem(word),
+          word = ifelse(grepl("ω", word), "omega", word),
+          word = ifelse(grepl("america", word), "america", word),
+          word = ifelse(grepl("allah", word), "allah", word),
+          word = removeNumbers(word),
+          word = stripWhitespace(word),
+          word = gsub("[[:punct:]]", " ", word)) %>% 
+    mutate_if(is.character, list(~na_if(.," "))) %>% 
+    na.omit() %>% 
+    group_by(label,id) %>% 
+    summarize(text = str_c(word, collapse = " ")) %>%
+    ungroup() %>% 
+   arrange(id)
+
+train_dtm <- train_df %>%
+   select(-img) %>%
+   mutate(text = removeWords(text, stopwords("english"))) %>%   
+   unnest_tokens(word, text) %>%
+   mutate(word = SnowballC::wordStem(word),
+          word = ifelse(grepl("ω", word), "omega", word),
+          word = ifelse(grepl("america", word), "america", word),
+          word = ifelse(grepl("allah", word), "allah", word),
+          word = removeNumbers(word),
+          word = stripWhitespace(word),
+          word = gsub("[[:punct:]]", " ", word)) %>% 
+    mutate_if(is.character, list(~na_if(.," "))) %>% 
+    na.omit() %>%
+    count(id, word) %>% 
+    cast_dtm(id, word, n)
+
+
+train_dtm_2<-removeSparseTerms(train_dtm, sparse = .99)
+```
+
+
+```{r}
+library(wordcloud)
+set.seed(1234)
+
+words<- train_df%>%
+  unnest_tokens(word, text) %>% 
+  mutate(word = ifelse(grepl("ω", word), "omega", word),
+         word = SnowballC::wordStem(word),
+         word = removeNumbers(word),
+         word = removeWords(word, stopwords("english")),
+         word = gsub("[[:punct:]]", " ", word),
+         word = ifelse(str_length(word)<=2, " ", word)) %>%
+  count(word, sort =T)
+
+
+
+wordcloud(words = words$word, freq = words$n,min.freq = 15,
+          max.words=500,  rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+```
+
+```{r}
+
+train_corpus <- VCorpus(VectorSource(train_df1$text))
+
+toSpace<- content_transformer(function(x,pattern)
+  { return(gsub(pattern, " ", x))})
+
+
+
+
+
+tc<- train_corpus %>% 
+  tm_map(removePunctuation) %>% 
+  tm_map(removeNumbers) %>% 
+  tm_map(tolower) %>%
+  tm_map(gsub, pattern = "america", replacement = "america") %>% 
+  tm_map(gsub, pattern = "allah", replacement = "allah") %>% 
+  tm_map(removeWords, stopwords("english")) %>% 
+  tm_map(stemDocument) %>% 
+  tm_map(stripWhitespace) %>%
+  tm_map(PlainTextDocument) %>% 
+  DocumentTermMatrix()
+
+  
+  
+  
+  for (i in 1:100) {
+    cat(paste("[[", i, "]] ", sep = ""))
+    #writeLines(myCorpus[[i]])
+    writeLines(as.character(tc[[i]]))
+}
+
+  
+  tc_df<- tidy(tc)
+
+tc_df %>% 
+  filter(grepl("america|allah", term)) %>% 
+  count(term, sort = T)
+
+tc_df %>% 
+  arrange(desc(count))
+
+
+```
+
+
+```{r}
+library(caret)
+library(tictoc)
+tic()
+train_rf <- train(x = as.matrix(train_dtm),
+                     y = train_token$label,
+                     method = "ranger",
+                     num.trees = 80,
+                     trControl = trainControl(method = "oob"))
+toc()
+
+
+summary(train_rf)
+
+train_rf$predictions
+
+train_glm2 <- train(x = x[,-4],
+                   y = train_token$label,
+  trControl = trainControl(method = "cv", number = 5),
+  method = "glm",
+  family = "binomial")
+
+train_glm <- train(x = as.matrix(train_dtm),
+                   y = train_token$label,
+  trControl = trainControl(method = "cv", number = 5),
+  method = "glm",
+  family = "binomial")
+
+summary(train_glm2)
+
+library(modelr)
+train_token %>% 
+  add_predictions(train_glm2)
+
+
+train_token %>% 
+  filter( id %in% c(1235:1274)) %>% 
+  select(id, label) %>% 
+  arrange(id)
+
+p.data<- predict(train_glm2, type = "prob")
+
+p.data %>% 
+  mutate(id = train_token$id) %>% 
+  pivot_longer(`non-hateful`:hateful, names_to = "label", values_to = "response") %>% 
+  mutate( response = ifelse(response>0.5, 1, 0)) %>% 
+  pivot_wider(names_from= "label", values_from = "response") %>% 
+  count(`non-hateful`,hateful)
+  
+
+```
+
+```{r}
+library(textrecipes)
+library(tidymodels)
+train_df1<-    train_df %>%
+   select(-img) %>%
+   group_by(label) %>% 
+   mutate(line_num = row_number()) %>% 
+   ungroup() %>% 
+   unnest_tokens(word, text) %>%
+   mutate(word = SnowballC::wordStem(word),
+          word = ifelse(grepl("ω", word), "omega", word),
+          word = ifelse(grepl("america", word), "america", word),
+          word = ifelse(grepl("allah", word), "allah", word),
+          word = removeNumbers(word),
+          word = gsub("[[:punct:]]", " ", word)) %>% 
+    mutate_if(is.character, list(~na_if(.," "))) %>% 
+    na.omit() %>% 
+   group_by(label,id) %>% 
+   summarize(text = str_c(word, collapse = " ")) %>%
+   ungroup() %>% 
+   mutate(text = gsub("[[:punct:]]", "", text))
+
+train_rec <- recipe(label ~ text, data = train_df1) %>%
+  step_tokenize(text) %>%
+  step_stopwords(text) %>%
+  step_tokenfilter(text) %>%
+  step_tfidf(text) %>%
+  step_normalize(all_predictors())
+
+train_prep<- prep(train_rec)
+
+train_prep
+
+
+lasso_spec <- logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet")
+
+lasso_wf <- workflow() %>%
+  add_recipe(train_rec) %>%
+  add_model(lasso_spec)
+
+lasso_wf
+
+lambda_grid <- grid_regular(penalty(), levels = 3)
+set.seed(123)
+review_folds <- bootstraps(train_df1, strata = label)
+review_folds
+
+
+doParallel::registerDoParallel()
+
+set.seed(2020)
+lasso_grid <- tune_grid(
+  lasso_wf,
+  resamples = review_folds,
+  grid = lambda_grid,
+  metrics = metric_set(roc_auc))
+
+lasso_grid %>%
+  collect_metrics()
+
+```
+
+```{r}
+
+library(h2o4gpu)
+library(reticulate)  # only needed if using a virtual Python environment
+use_virtualenv("/home/ledell/venv/h2o4gpu")  # set this to the path of your venv
+
+train_token %>% 
+  glimpse()
+
+
+train_x<- as.matrix(train_dtm)
+train_y<-  train_token %>% select(label)
+
+model_enc<- h2o4gpu.elastic_net_classifier() %>% 
+                fit(train_x, train_y)
+```
+
+Using Udpipe model for lemmatisation
+```{r}
+library(udpipe)
+# download current udpipe model for English
+udtarget <- udpipe_download_model(language = "english",
+                                  model_dir = tempdir())
+# load the model
+udmodel <- udpipe_load_model(file = udtarget$file_model) 
+
+words <- udpipe_annotate(udmodel, x = train_df$text, doc_id = train_df$id) %>% 
+  as.data.frame() %>%
+  select(id = doc_id, token, lemma, upos, sentence_id) %>%
+  mutate(id = as.numeric(id))
+
+```
+
+```{r}
+vocabulary <-  words %>%
+  count(lemma) %>%
+  ungroup() %>%
+  mutate(lemma = removeNumbers(lemma),
+          lemma = stripWhitespace(lemma),
+          lemma = removeWords(lemma, stopwords("english")),
+          lemma = gsub("[[:punct:]]", "", lemma)) %>% 
+  arrange(desc(n)) %>%
+  filter(n >= 5 ) %>%
+  filter(str_detect(lemma, "")) %>% # little prediction value in rarer words
+  mutate(id_slovo = row_number()) %>% # unique id per lemma
+  select(lemma, id_slovo)
+```
+
+```{r}
+# 150 zeroes for each tweet id for padding
+vata <- expand.grid(id = unique(words$id),
+                    word_num = 1:150,
+                    id_slovo = 0)
+
+word_matrix <-   words %>% # words
+  # filtering join! words not in vocabulary are discarded
+  inner_join(vocabulary, by = c('lemma' = 'lemma')) %>% 
+  select(id, lemma, id_slovo) %>%
+  group_by(id) %>%
+  mutate(word_num = row_number()) %>% # 
+  ungroup() %>%
+  select(id, word_num, id_slovo) %>% # relevant columns
+  rbind(vata) %>% # bind the 150 zeroes per meme
+  group_by(id, word_num) %>%
+  mutate(id_slovo = max(id_slovo)) %>% # will include duplicites
+  ungroup() %>%
+  unique() %>% # remove duplicites
+  spread(word_num, id_slovo) # spread to matrix format
+
+keras_input <- train_df %>%
+  select(id, label, text) %>%
+  inner_join(word_matrix, by = c('id' = 'id'))
+
+glimpse(keras_input)
+```
+
+```{r}
+set.seed(42) # Zaphod Beeblebrox advises to trust no other!
+
+idx <- createDataPartition(keras_input$label, p = .8, list = F, times = 1) # 80 / 20 split
+
+train_data <- keras_input[idx, ] # train dataset
+test_data <- keras_input[-idx, ]
+
+```
+
+```{r}
+train_data <- train_data %>%
+  mutate(hateful = ifelse(label == 'hateful', 1,0)) %>% # binary output
+  select(-id, -label, -text)
+
+x_train <- data.matrix(train_data %>% select(-hateful)) # everything except target
+y_train <- data.matrix(train_data %>% select(hateful)) # target, and target only
+
+vocab_size <- vocabulary %>% # count unique word ids
+  pull(id_slovo) %>% 
+  unique() %>%
+  length() + 1 # one extra for the zero padding
+```
+
+```{r}
+library(keras)
+library(tensorflow)
+#tensorflow::use_session_with_seed(1234, disable_gpu = F, disable_parallel_cpu = F)
+model <- keras_model_sequential() %>% 
+  layer_embedding(input_dim = vocab_size, output_dim = 256) %>%
+  bidirectional(layer_lstm(units = 128)) %>%
+  layer_dropout(rate = 0.5) %>% 
+  layer_dense(units = 1, activation = 'sigmoid')  %>% 
+  compile(optimizer = "rmsprop",
+          loss = "binary_crossentropy",
+          metrics = c("accuracy"))
+
+history <- model %>%  # fit the model (this will take a while...)
+  fit(x_train, 
+      y_train, 
+      epochs = 20, 
+      batch_size = 64, 
+      validation_split = 0.2)
+
+summary(model)
+plot(history)
+
+
+#tensorflow::use_session_with_seed(124, disable_gpu = F, disable_parallel_cpu = F)
+#runs <- tuning_run("experiment.R", flags = list(dense_units = c(32, 64)))
+```
+
+```{r}
+model <- keras_model_sequential() 
+
+model %>% 
+  layer_dense(units = 64, 
+              activation = 'sigmoid',
+              input_shape = c(150)) %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 32,
+              activation = 'sigmoid') %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 16,
+              activation = 'sigmoid') %>% 
+  layer_dropout(rate = 0.1) %>% 
+  layer_dense(units = 1, activation = 'sigmoid')
+# Compile
+model %>% compile(loss = 'binary_crossentropy',
+                  optimizer = 'rmsprop',
+                  metrics = 'accuracy')
+# Fit
+history <- model %>% 
+  fit(x_train,
+      y_train,
+      epochs = 50,
+      batch_size = 32,
+      validation_split = 0.2)
+
+```
+
+
+```{r}
+pred_data <- test_data %>% # expected results
+  select(id, label, text)
+
+test_data <- test_data %>%
+  mutate(hateful = ifelse(label == 'hateful', 1,0)) %>% # binary output
+  select(-id, -label, -text) # no cheating!
+
+x_pred <- data.matrix(test_data %>% select(-hateful)) # keras needs matrix
+
+pred <- model %>% # let keras sweat...
+  predict_proba(x_pred)
+
+verifikace <- pred_data %>% # correct results ...
+  cbind(pred) # ... joined with predictions
+
+verifikace <- verifikace %>%
+  mutate(label_pred = ifelse(pred > 0.5, 'hateful', 'non-hateful'))
+
+conf_mtx <- table(verifikace$label, verifikace$label_pred)
+
+print(paste0('Correctly predicted ',
+             sum(diag(conf_mtx)), ' of ',
+             sum(conf_mtx), ' meems, which means ', 
+             round(100 * sum(diag(conf_mtx))/sum(conf_mtx), 2), 
+             '% of the total.'))
+```
+
